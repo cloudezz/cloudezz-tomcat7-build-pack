@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project default="tomcat7-build-deploy" xmlns:au="antlib:org.apache.ant.antunit" xmlns:git="antlib:com.rimerosolutions.ant.git" xmlns="antlib:org.apache.tools.ant">
+
+	<property environment="env" />
+
+	<property name="lang.type" value="java" />
+	<property name="win.app.folder" value="app" />
+	<property name="unix.app.folder" value="/cloudezz/app" />
+	<property name="branchlist.file" value="git-branch-names.txt" />
+	<property name="cloudezz.folder" value="cloudezz-deploy" />
+	<property name="maven.home" value="${env.M2_HOME}" />
+	<property name="unix.tomcat.webapps" value="/var/lib/tomcat7/webapps/" />
+	<property name="win.tomcat.webapps" value="C:/projects/tomcat-7.0.34/webapps" />
+	<property name="gitURL" value="${env.gitURL}" />
+
+
+
+	<property name="ant.jarPath" value="./ant-lib" />
+
+	<!--Add git task from rimerosolutions github project -->
+	<path id="ant.classpath">
+		<pathelement location="${ant.jarPath}/org.eclipse.jgit.ant-3.0.0.201306101825-r.jar" />
+		<pathelement location="${ant.jarPath}/org.eclipse.jgit-3.0.0.201306101825-r.jar" />
+		<pathelement location="${ant.jarPath}/jsch-0.1.50.jar" />
+		<pathelement location="${ant.jarPath}/ant-git-tasks-0.0.1.jar" />
+	</path>
+	<taskdef uri="antlib:com.rimerosolutions.ant.git" resource="com/rimerosolutions/ant/git/jgit-ant-lib.xml">
+		<classpath refid="ant.classpath" />
+	</taskdef>
+
+	<!--Add ant contrib task items -->
+	<taskdef resource="net/sf/antcontrib/antcontrib.properties">
+		<classpath>
+			<pathelement location="${ant.jarPath}/ant-contrib-1.0b3.jar" />
+		</classpath>
+	</taskdef>
+
+	<condition property="app.folder" value="${win.app.folder}" else="${unix.app.folder}">
+		<os family="windows" />
+	</condition>
+
+	<condition property="tomcat.webapps" value="${win.tomcat.webapps}" else="${unix.tomcat.webapps}">
+		<os family="windows" />
+	</condition>
+	
+	<!--load build properties -->
+	<property file="${app.folder}/${cloudezz.folder}/cloudezz-tomcat7-build.properties" />
+
+	<!--testing load build properties -->
+	<!-- <property file="./cloudezz-deploy/cloudezz-tomcat7-build.properties" /> -->
+
+	<macrodef name="quiet">
+		<element name="body" implicit="yes" />
+		<sequential>
+			<script language="javascript">
+				project.getBuildListeners().firstElement().setMessageOutputLevel(0);
+			</script>
+			<body />
+			<script language="javascript">
+				project.getBuildListeners().firstElement().setMessageOutputLevel(2);
+			</script>
+		</sequential>
+	</macrodef>
+
+	<target name="pre-build">
+		<if>
+			<available file="${app.folder}/${cloudezz.folder}/${pre-build-script}" />
+			<then>
+				<exec dir="${app.folder}/${cloudezz.folder}" executable="/bin/bash" failonerror="false" failifexecutionfails="false" osfamily="unix">
+					<arg value="${pre-build-script}" />
+				</exec>
+			</then>
+		</if>
+	</target>
+
+	<!--Add get the src code to app folder -->
+	<target name="git-clone-pull" depends="pre-build">
+		<quiet>
+			<if>
+				<available file="${app.folder}/.git/index" />
+				<then>
+					<git:git directory="${app.folder}" verbose="true">
+						<git:pull />
+					</git:git>
+				</then>
+				<else>
+					<git:git directory="${app.folder}" verbose="true">
+						<git:clone uri="${gitURL}" directory="${app.folder}" />
+					</git:git>
+				</else>
+			</if>
+		</quiet>
+	</target>
+
+
+	<target name="git-branch-exist"  depends="git-clone-pull" description="Test branch Exist">
+		<git:git directory="${app.folder}" verbose="true">
+			<git:checkout branchName="${branch.name}" />
+			<git:branchlist verifycontainnames="${branch.name}" outputfilename="${branchlist.file}" failonerror="true" />
+		</git:git>
+	</target>
+
+
+
+	<target name="build" depends="git-branch-exist" description="Builds the maven project">
+		<quiet>
+			<exec dir="${app.folder}" executable="cmd" failonerror="true" osfamily="windows">
+				<arg line="/c mvn ${maven.build.command}" />
+			</exec>
+
+			<exec dir="${app.folder}" executable="mvn" failonerror="true" osfamily="unix">
+				<arg line="${maven.build.command}" />
+			</exec>
+		</quiet>
+	</target>
+
+
+	<target name="post-build" depends="build">
+		<if>
+			<available file="${app.folder}/${cloudezz.folder}/${post-build-script}" />
+			<then>
+				<exec dir="${app.folder}/${cloudezz.folder}" executable="/bin/bash" failonerror="false" failifexecutionfails="false" osfamily="unix">
+					<arg value="${post-build-script}" />
+				</exec>
+			</then>
+		</if>
+	</target>
+
+	<target name="pre-deploy" depends="post-build">
+		<if>
+			<available file="${app.folder}/${cloudezz.folder}/${pre-deploy-script}" />
+			<then>
+				<exec dir="${app.folder}/${cloudezz.folder}" executable="/bin/bash" failonerror="false" failifexecutionfails="false" osfamily="unix">
+					<arg value="${pre-deploy-script}" />
+				</exec>
+			</then>
+		</if>
+	</target>
+
+	<target name="stop-tomcat" depends="pre-deploy" description="tomcat stop">
+		<exec executable="service" failonerror="false" osfamily="unix" dir="${app.folder}">
+			<arg value="tomcat7" />
+			<arg value="stop" />
+		</exec>
+	</target>
+
+	<target name="tomcat-webapps-clean" depends="stop-tomcat" description="Webapp folder clean of tomcat">
+		<delete>
+			<fileset dir="${tomcat.webapps}">
+				<include name="**/*" />
+			</fileset>
+		</delete>
+	</target>
+
+	<target name="tomcat-deploy-war" depends="tomcat-webapps-clean" description="Deploy war to tomcat">
+		<copy file="${app.folder}/${target.war.file}" todir="${tomcat.webapps}" />
+	</target>
+
+
+	<target name="start" depends="tomcat-deploy-war" description="Calling tomcat start">
+		<exec executable="service" failonerror="false" osfamily="unix" dir="${app.folder}">
+			<arg value="tomcat7" />
+			<arg value="start" />
+		</exec>
+	</target>
+
+	<target name="stop" description="Calling tomcat stop">
+		<exec executable="service" failonerror="false" osfamily="unix" dir="${app.folder}">
+			<arg value="tomcat7" />
+			<arg value="stop" />
+		</exec>
+	</target>
+
+
+	<target name="clean" depends="stop">
+		<delete dir="${app.folder}" quiet="true" />
+		<delete file="${branchlist.file}" quiet="true" />
+		<delete>
+			<fileset dir="${tomcat.webapps}">
+				<include name="**/*" />
+			</fileset>
+		</delete>
+	</target>
+
+
+	 <target name="run">
+			<trycatch>
+				<try>
+					<antcall target="start" />
+				</try>
+				<catch>
+					<antcall target="clean" />
+					<antcall target="restart" />
+				</catch>
+			</trycatch>
+	</target> 
+	
+	
+	<target name="post-deploy" depends="run">
+		<if>
+			<available file="${app.folder}/${cloudezz.folder}/${post-deploy-script}" />
+			<then>
+				<exec dir="${app.folder}/${cloudezz.folder}" executable="/bin/bash" failonerror="false" failifexecutionfails="false" osfamily="unix">
+					<arg value="${post-deploy-script}" />
+				</exec>
+			</then>
+		</if>
+	</target>
+
+
+	<target name="restart" depends="start" />
+
+	<target name="tomcat7-build-deploy" depends="post-deploy" />
+
+</project>
